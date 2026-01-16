@@ -7,9 +7,11 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
 
+import com.educandoweb.course.entities.Category;
 import com.educandoweb.course.entities.Order;
 import com.educandoweb.course.entities.User;
 import com.educandoweb.course.entities.enums.OrderStatus;
+import com.educandoweb.course.repositories.CategoryRepository;
 import com.educandoweb.course.repositories.OrderRepository;
 import com.educandoweb.course.repositories.UserRepository;
 
@@ -21,9 +23,12 @@ public class TestConfig implements CommandLineRunner{
 	
 	private OrderRepository orderRepository;
 	
-	public TestConfig (UserRepository userRepository, OrderRepository orderRepository) {
+	private CategoryRepository categoryRepository;
+	
+	public TestConfig (UserRepository userRepository, OrderRepository orderRepository, CategoryRepository categoryRepository) {
 		this.userRepository = userRepository;
 		this.orderRepository = orderRepository;
+		this.categoryRepository = categoryRepository;
 	}
 
 	@Override
@@ -39,5 +44,10 @@ public class TestConfig implements CommandLineRunner{
 		Order o3 = new Order(null, Instant.parse("2019-07-22T15:21:22Z"), u1, OrderStatus.WAITING_PAYMENT); 
 		
 		orderRepository.saveAll(Arrays.asList(o1, o2, o3));
+		
+		Category c1 = new Category(null, "clothes");
+		Category c2 = new Category(null, "toys");
+		
+		categoryRepository.saveAll(Arrays.asList(c1, c2));
 	}
 }
