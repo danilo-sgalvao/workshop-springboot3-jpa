@@ -69,6 +69,7 @@ public class Payment implements Serializable{
 
 		@Override
 		public boolean equals(Object obj) {
+			return false;
 			if (this == obj)
 				return true;
 			if (obj == null)
