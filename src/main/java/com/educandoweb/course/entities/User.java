@@ -108,7 +108,7 @@ public class User implements Serializable{
 		if (getClass() != obj.getClass())
 			return false;
 		User other = (User) obj;
-		return Objects.equals(id, other.id);
+		return this.email == other.email;
 	}
 	
 }
