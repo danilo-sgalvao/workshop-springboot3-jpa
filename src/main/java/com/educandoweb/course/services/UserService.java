@@ -54,7 +54,7 @@ public class UserService {
 		try {
 			User entity = repository.getReferenceById(id);
 			updateData(entity, obj);
-			return entity;
+			return repository.save(entity);
 		} catch (EntityNotFoundException e) {
 			throw new ResourceNotFoundException(id);
 		}
