@@ -11,7 +11,9 @@ Projeto de estudo desenvolvido no curso **Java COMPLETO** de Nelio Alves. Implem
 | Java | 21 |
 | Spring Boot | 3.5.10 |
 | Spring Data JPA / Hibernate | (via Spring Boot) |
-| H2 Database | (via Spring Boot) |
+| H2 Database (perfil `test`) | (via Spring Boot) |
+| PostgreSQL (perfil `prod`) | 16 |
+| Docker / Docker Compose | — |
 | Maven | (wrapper incluso) |
 
 ---
@@ -302,9 +304,97 @@ O perfil ativo é `test` (definido em `application.properties`). Com ele ativo, 
 
 O schema é gerenciado pelo Hibernate (`ddl-auto=update`) — não há scripts SQL manuais.
 
+### Perfil `prod` — PostgreSQL
+
+Configurado em `application-prod.properties`. Em vez de valores fixos, lê três variáveis de ambiente, mantendo credenciais fora do código:
+
+```properties
+spring.datasource.url=${DB_URL}
+spring.datasource.username=${DB_USER}
+spring.datasource.password=${DB_PASS}
+```
+
+O perfil é selecionado pela variável de ambiente `SPRING_PROFILES_ACTIVE=prod`, que tem prioridade sobre o `spring.profiles.active=test` do `application.properties`. Assim o **mesmo JAR/imagem** roda com H2 localmente e com PostgreSQL em produção, sem recompilar. O `TestConfig` (seed) só roda no perfil `test`, então o banco `prod` começa vazio.
+
+---
+
+## Containerização (Docker)
+
+O projeto é empacotado em uma imagem Docker via **multi-stage build** (`Dockerfile`):
+
+1. **Estágio `build`** — imagem `maven:3.9-eclipse-temurin-21` compila o projeto e gera o JAR.
+2. **Estágio `runtime`** — imagem `eclipse-temurin:21-jre-alpine` (mínima) recebe apenas o JAR.
+
+O resultado é uma imagem enxuta (só JRE + JAR, sem Maven nem código-fonte). O `.dockerignore` evita copiar `target/`, `.git/` e afins para o contexto de build.
+
+### Rodar localmente com Docker Compose
+
+O `docker-compose.yml` sobe **app + PostgreSQL** juntos:
+
+```powershell
+# Sobe os dois containers (constrói a imagem do app na primeira vez)
+docker compose up --build
+
+# Em background
+docker compose up --build -d
+
+# Para e remove os containers (dados do volume são preservados)
+docker compose down
+
+# Para e APAGA o volume (reseta o banco)
+docker compose down -v
+```
+
+Detalhes do Compose:
+- O serviço `db` usa um **healthcheck** (`pg_isready`); o serviço `app` só inicia após o banco estar saudável (`depends_on: condition: service_healthy`).
+- Os dados do PostgreSQL persistem em um **volume nomeado** (`postgres_data`).
+- Dentro da rede do Compose, o app alcança o banco pelo hostname `db` (nome do serviço) — daí `DB_URL=jdbc:postgresql://db:5432/coursedb`.
+
+Após subir, a API responde em `http://localhost:8080`.
+
+---
+
+## Deploy em Produção (Railway)
+
+A aplicação está publicada no [Railway](https://railway.app) usando o `Dockerfile` (o `docker-compose.yml` é apenas para uso local).
+
+### Passos
+
+1. **New Project → Deploy from GitHub repo** — o Railway detecta o `Dockerfile` automaticamente.
+2. **Add Database → PostgreSQL** — provisiona um banco gerenciado.
+3. No serviço da aplicação, definir as **variáveis de ambiente** referenciando o serviço do banco:
+
+| Variável | Valor |
+|---|---|
+| `SPRING_PROFILES_ACTIVE` | `prod` |
+| `DB_URL` | `jdbc:postgresql://${{Postgres.RAILWAY_TCP_PROXY_DOMAIN}}:${{Postgres.RAILWAY_TCP_PROXY_PORT}}/${{Postgres.PGDATABASE}}` |
+| `DB_USER` | `${{Postgres.PGUSER}}` |
+| `DB_PASS` | `${{Postgres.PGPASSWORD}}` |
+
+4. **Settings → Networking → Generate Domain** — gera a URL pública.
+
+### Notas aprendidas no processo
+
+- A URL do datasource **precisa** do prefixo `jdbc:` — o Railway fornece `DATABASE_URL` no formato `postgresql://...`, que o Spring/HikariCP rejeita (`'url' must start with "jdbc"`).
+- Referências `${{Servico.VARIAVEL}}` ligam pelo **nome do serviço**. Renomear ou recriar o banco exige reconfigurar as referências — no canvas do Railway, a **seta** entre serviços indica uma referência ativa.
+- O heap da JVM é limitado no `Dockerfile` (`-Xmx256m`) para caber no plano gratuito do Railway (0.5 GB RAM).
+
 ---
 
 ## Estrutura de Pacotes
+
+Arquivos de infraestrutura na raiz do projeto:
+
+```
+course/
+├── Dockerfile                               # Multi-stage build (Maven → JRE Alpine)
+├── docker-compose.yml                       # app + PostgreSQL para rodar localmente
+├── .dockerignore                            # Exclui target/, .git/ etc. do build
+└── src/main/resources/
+    ├── application.properties               # Config base (perfil ativo: test)
+    ├── application-test.properties          # H2 em memória
+    └── application-prod.properties          # PostgreSQL via variáveis de ambiente
+```
 
 ```
 src/main/java/com/educandoweb/course/
