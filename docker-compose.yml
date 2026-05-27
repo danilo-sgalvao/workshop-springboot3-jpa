@@ -1,0 +1,72 @@
+services:
+
+  # -------------------------------------------------------
+  # Serviço 1: banco de dados PostgreSQL
+  # -------------------------------------------------------
+  db:
+    image: postgres:16-alpine
+    # Usa imagem oficial do PostgreSQL 16 (alpine = mínima)
+    # Não precisamos compilar nada — o Docker baixa pronto do Docker Hub
+
+    environment:
+      POSTGRES_DB: coursedb           # nome do banco criado automaticamente
+      POSTGRES_USER: course_user      # usuário do banco
+      POSTGRES_PASSWORD: course_pass  # senha do banco
+
+    ports:
+      - "5432:5432"
+      # formato: "porta_do_seu_PC:porta_dentro_do_container"
+      # Expõe o banco para você acessar via DBeaver/pgAdmin na sua máquina
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Persiste os dados em um volume nomeado.
+      # Sem isso, todos os dados sumiriam ao parar o container.
+
+    healthcheck:
+      # Verifica se o PostgreSQL está pronto para aceitar conexões.
+      # O serviço "app" só sobe depois que este healthcheck passar.
+      test: ["CMD-SHELL", "pg_isready -U course_user -d coursedb"]
+      interval: 5s   # testa a cada 5 segundos
+      timeout: 5s    # considera falha se não responder em 5s
+      retries: 5     # tenta 5 vezes antes de marcar como unhealthy
+
+  # -------------------------------------------------------
+  # Serviço 2: a aplicação Spring Boot
+  # -------------------------------------------------------
+  app:
+    build: .
+    # "build: ." significa: construa a imagem usando o Dockerfile
+    # que está na pasta atual (raiz do projeto)
+
+    ports:
+      - "8080:8080"
+
+    environment:
+      # Ativa o perfil "prod" do Spring Boot
+      SPRING_PROFILES_ACTIVE: prod
+
+      # Valores lidos pelo application-prod.properties via ${...}
+      # "db" é o nome do serviço acima — o Docker resolve para o IP interno
+      DATABASE_URL: jdbc:postgresql://db:5432/coursedb
+      DATABASE_USERNAME: course_user
+      DATABASE_PASSWORD: course_pass
+
+    depends_on:
+      db:
+        condition: service_healthy
+    # Aguarda o healthcheck do "db" passar antes de iniciar o app.
+    # Sem o healthcheck, o app tentaria conectar antes do PostgreSQL
+    # estar pronto e falharia na inicialização.
+
+    restart: on-failure
+    # Se o app crashar (ex.: banco ainda não aceitou conexão),
+    # o Docker reinicia automaticamente. Rede de segurança extra.
+
+# -------------------------------------------------------
+# Volumes nomeados — gerenciados pelo Docker
+# -------------------------------------------------------
+volumes:
+  postgres_data:
+  # O Docker cria e mantém este volume no seu sistema.
+  # Os dados do PostgreSQL ficam aqui entre reinicializações.
