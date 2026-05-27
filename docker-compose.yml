@@ -46,13 +46,11 @@ services:
       # Ativa o perfil "prod" do Spring Boot
       SPRING_PROFILES_ACTIVE: prod
 
-      # Mesmos nomes que o Railway injeta automaticamente.
-      # Aqui os valores apontam para o serviço "db" do Compose.
-      PGHOST: db
-      PGPORT: 5432
-      PGDATABASE: coursedb
-      PGUSER: course_user
-      PGPASSWORD: course_pass
+      # Variáveis lidas pelo application-prod.properties.
+      # "db" é resolvido pelo Docker para o IP interno do container do banco.
+      DB_URL: jdbc:postgresql://db:5432/coursedb
+      DB_USER: course_user
+      DB_PASS: course_pass
 
     depends_on:
       db:
