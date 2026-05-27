@@ -46,11 +46,13 @@ services:
       # Ativa o perfil "prod" do Spring Boot
       SPRING_PROFILES_ACTIVE: prod
 
-      # Valores lidos pelo application-prod.properties via ${...}
-      # "db" é o nome do serviço acima — o Docker resolve para o IP interno
-      DATABASE_URL: jdbc:postgresql://db:5432/coursedb
-      DATABASE_USERNAME: course_user
-      DATABASE_PASSWORD: course_pass
+      # Mesmos nomes que o Railway injeta automaticamente.
+      # Aqui os valores apontam para o serviço "db" do Compose.
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: coursedb
+      PGUSER: course_user
+      PGPASSWORD: course_pass
 
     depends_on:
       db:
