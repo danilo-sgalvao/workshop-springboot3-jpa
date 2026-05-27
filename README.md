@@ -42,7 +42,7 @@ O projeto segue a arquitetura em 4 camadas sob o pacote `com.educandoweb.course`
 ┌─────────────────────────────────┐
 │   resources/  (REST Controllers) │  ← Recebe requisições HTTP
 ├─────────────────────────────────┤
-│   services/   (Regras de negócio)│  ← Lógica da aplicação
+│   services/   (Regras de negócio)│  ← Lógica da aplicação + exceções de domínio
 ├─────────────────────────────────┤
 │   repositories/ (Acesso a dados) │  ← Spring Data JPA
 ├─────────────────────────────────┤
@@ -50,7 +50,7 @@ O projeto segue a arquitetura em 4 camadas sob o pacote `com.educandoweb.course`
 └─────────────────────────────────┘
 ```
 
-O fluxo de uma requisição segue sempre `Resource → Service → Repository → Entity`, nunca pulando camadas.
+O fluxo de uma requisição segue sempre `Resource → Service → Repository → Entity`, nunca pulando camadas. Exceções de domínio são lançadas nos serviços e capturadas por um `@ControllerAdvice` na camada de resources.
 
 ---
 
@@ -61,12 +61,10 @@ O fluxo de uma requisição segue sempre `Resource → Service → Repository �
 ```
 User ──────────────────── Order ──────────────────── OrderItem ──── Product
  1                         N  1                       N        N:1
- │                               │                    │         │
- │  (cliente faz pedidos)        │  (itens do pedido) │         │
-                                 │                              │
-                         OrderStatus                        Category
-                         (enum)                            (N:N via
-                                                       tb_product_category)
+                                │                                    │
+                                │ 1:1                                │ N:N
+                            Payment                             Category
+                                                           (tb_product_category)
 ```
 
 ### Entidades
@@ -77,13 +75,13 @@ Representa um cliente do sistema.
 | Campo | Tipo | Descrição |
 |---|---|---|
 | `id` | `Long` | Chave primária (auto-increment) |
-| `name` | `String` | Nome completo (max 100) |
-| `email` | `String` | E-mail (max 100) |
-| `phone` | `String` | Telefone (max 50) |
-| `password` | `String` | Senha (max 100) |
+| `name` | `String` | Nome completo |
+| `email` | `String` | E-mail |
+| `phone` | `String` | Telefone |
+| `password` | `String` | Senha |
 | `orders` | `List<Order>` | Pedidos do usuário (**não serializado**) |
 
-**Decisão de design:** `orders` recebe `@JsonIgnore` para evitar referência circular na serialização JSON — Order já referencia User via `client`, então serializar `orders` de volta causaria um loop infinito.
+**Decisão de design:** `orders` recebe `@JsonIgnore` para evitar referência circular na serialização JSON — `Order` já referencia `User` via `client`, então serializar `orders` de volta causaria um loop infinito.
 
 ---
 
@@ -97,11 +95,13 @@ Representa um pedido feito por um usuário.
 | `orderStatus` | `Integer` | Código numérico do status |
 | `client` | `User` | Usuário que fez o pedido (`client_id`) |
 | `items` | `Set<OrderItem>` | Itens do pedido |
+| `payment` | `Payment` | Pagamento associado (pode ser `null`) |
 
 **Decisões de design:**
-- `moment` usa `java.time.Instant` (representação UTC) com `@JsonFormat` para serializar no padrão ISO 8601: `"2019-06-20T19:53:07Z"`.
-- `orderStatus` é armazenado como `Integer` no banco, mas exposto como o enum `OrderStatus` via getters/setters — decisão que permite adicionar novos status sem quebrar dados existentes e torna a serialização JSON legível (retorna o nome do enum, não o inteiro).
-- `items` usa `Set` em vez de `List` porque `OrderItem` tem chave composta, e `Set` evita duplicatas naturalmente via `hashCode/equals`.
+- `moment` usa `java.time.Instant` com `@JsonFormat` para serializar no padrão ISO 8601.
+- `orderStatus` é armazenado como `Integer` no banco, exposto via getters/setters como o enum `OrderStatus`.
+- `payment` é `@OneToOne(mappedBy = "order", cascade = CascadeType.ALL)` — o lado dono é `Payment`, que usa `@MapsId` para compartilhar a PK com o pedido.
+- `getTotal()` soma os subtotais de todos os `OrderItem` e retorna o valor total do pedido.
 
 ---
 
@@ -120,6 +120,19 @@ Enum que codifica o ciclo de vida de um pedido com inteiros explícitos.
 
 ---
 
+#### `Payment` — `tb_payment`
+Representa o pagamento de um pedido.
+
+| Campo | Tipo | Descrição |
+|---|---|---|
+| `id` | `Long` | Chave primária — **mesma** que `Order.id` |
+| `moment` | `Instant` | Data/hora do pagamento em UTC |
+| `order` | `Order` | Pedido associado (**não serializado**) |
+
+**Decisão de design:** `@MapsId` faz com que `Payment` compartilhe a mesma PK do `Order` a que pertence — elimina a necessidade de uma coluna `order_id` separada e reforça que um pagamento só existe dentro do contexto do seu pedido. `order` recebe `@JsonIgnore` para evitar referência circular.
+
+---
+
 #### `OrderItem` — `tb_order_item`
 Representa um item dentro de um pedido: qual produto, em qual quantidade e com qual preço foi comprado.
 
@@ -129,9 +142,10 @@ Representa um item dentro de um pedido: qual produto, em qual quantidade e com q
 | `quantity` | `Integer` | Quantidade do produto |
 | `price` | `Double` | Preço unitário no momento da compra |
 
-**Decisão de design:** `OrderItem` é a solução para o relacionamento **many-to-many com atributos extras** entre `Order` e `Product`. Uma simples `@JoinTable` não comporta `quantity` e `price`, então `OrderItem` vira uma entidade de associação com chave composta. O preço é copiado no momento da compra para preservar o valor histórico, mesmo que o preço do produto mude depois.
+**Métodos calculados:**
+- `getSubTotal()` — retorna `price * quantity` (subtotal do item).
 
-`getOrder()` recebe `@JsonIgnore` para evitar referência circular, já que `Order` já inclui seus `items`.
+**Decisão de design:** `OrderItem` é a solução para o relacionamento **many-to-many com atributos extras** entre `Order` e `Product`. O preço é copiado no momento da compra para preservar o valor histórico. `getOrder()` recebe `@JsonIgnore` para evitar referência circular.
 
 ---
 
@@ -143,7 +157,7 @@ Chave primária composta (embeddable) de `OrderItem`.
 | `order` | `Order` | `order_id` |
 | `product` | `Product` | `product_id` |
 
-**Decisão de design:** anotada com `@Embeddable`, é embutida em `OrderItem` via `@EmbeddedId`. `hashCode` e `equals` consideram **ambos** os campos, garantindo unicidade da combinação pedido + produto. Isso impede que o mesmo produto apareça duas vezes no mesmo pedido.
+**Decisão de design:** anotada com `@Embeddable` e embutida em `OrderItem` via `@EmbeddedId`. `hashCode` e `equals` consideram ambos os campos, impedindo que o mesmo produto apareça duas vezes no mesmo pedido.
 
 ---
 
@@ -159,8 +173,6 @@ Representa um produto disponível para venda.
 | `imgUrl` | `String` | URL da imagem |
 | `categories` | `Set<Category>` | Categorias do produto |
 
-**Decisão de design:** o relacionamento com `Category` é `@ManyToMany` — um produto pode pertencer a várias categorias e uma categoria pode ter vários produtos. A tabela de junção `tb_product_category` é declarada com `@JoinTable` no lado **dono** da relação (`Product`).
-
 ---
 
 #### `Category` — `tb_category`
@@ -171,8 +183,6 @@ Representa uma categoria de produtos.
 | `id` | `Long` | Chave primária (auto-increment) |
 | `name` | `String` | Nome da categoria |
 | `products` | `Set<Product>` | Produtos da categoria (**não serializado**) |
-
-**Decisão de design:** `products` usa `mappedBy = "categories"` (lado inverso do many-to-many) e `@JsonIgnore` para evitar referência circular — serializar uma categoria já inclui o nome, não há necessidade de listar todos os produtos dentro dela.
 
 ---
 
@@ -186,19 +196,22 @@ Representa uma categoria de produtos.
 | `OrderItem` → `Order` | via `OrderItemPK` / `@ManyToOne` | `order_id` |
 | `OrderItem` → `Product` | via `OrderItemPK` / `@ManyToOne` | `product_id` |
 | `Product` ↔ `Category` | `@ManyToMany` | tabela `tb_product_category` |
+| `Order` → `Payment` | `@OneToOne(cascade = ALL)` | PK compartilhada via `@MapsId` |
 
 ---
 
 ## Camada de Serviços
 
-Cada serviço é anotado com `@Service` e usa **injeção de dependência via construtor** (sem `@Autowired` no campo — prática recomendada para testabilidade).
+Cada serviço é anotado com `@Service` e usa **injeção de dependência via construtor**.
 
 | Serviço | Métodos |
 |---|---|
-| `UserService` | `findAll()`, `findById(id)` |
+| `UserService` | `findAll()`, `findById(id)`, `insert(obj)`, `delete(id)`, `update(id, obj)` |
 | `OrderService` | `findAll()`, `findById(id)` |
 | `ProductService` | `findAll()`, `findById(id)` |
 | `CategoryService` | `findAll()`, `findById(id)` |
+
+`UserService` é o único com CRUD completo implementado até o momento. Os demais serviços ainda expõem apenas consultas.
 
 ---
 
@@ -206,16 +219,73 @@ Cada serviço é anotado com `@Service` e usa **injeção de dependência via co
 
 Todos os controllers usam `@RestController` e retornam `ResponseEntity<T>` para controle explícito do status HTTP.
 
-| Método | Endpoint | Descrição |
+### Users
+
+| Método | Endpoint | Status de sucesso | Descrição |
+|---|---|---|---|
+| GET | `/users` | 200 OK | Lista todos os usuários |
+| GET | `/users/{id}` | 200 OK | Busca usuário por ID |
+| POST | `/users` | 201 Created | Cria novo usuário |
+| PUT | `/users/{id}` | 200 OK | Atualiza nome, e-mail e telefone |
+| DELETE | `/users/{id}` | 204 No Content | Remove usuário por ID |
+
+> **POST** retorna o header `Location` com a URI do recurso criado.  
+> **PUT** atualiza apenas `name`, `email` e `phone` (senha não é alterada por este endpoint).
+
+### Orders
+
+| Método | Endpoint | Status de sucesso | Descrição |
+|---|---|---|---|
+| GET | `/orders` | 200 OK | Lista todos os pedidos |
+| GET | `/orders/{id}` | 200 OK | Busca pedido por ID |
+
+### Products
+
+| Método | Endpoint | Status de sucesso | Descrição |
+|---|---|---|---|
+| GET | `/products` | 200 OK | Lista todos os produtos |
+| GET | `/products/{id}` | 200 OK | Busca produto por ID |
+
+### Categories
+
+| Método | Endpoint | Status de sucesso | Descrição |
+|---|---|---|---|
+| GET | `/categories` | 200 OK | Lista todas as categorias |
+| GET | `/categories/{id}` | 200 OK | Busca categoria por ID |
+
+---
+
+## Tratamento de Exceções
+
+O projeto implementa um mecanismo centralizado de tratamento de erros:
+
+### Exceções de domínio (`services/exceptions/`)
+
+| Classe | Herda de | Quando é lançada |
 |---|---|---|
-| GET | `/users` | Lista todos os usuários |
-| GET | `/users/{id}` | Busca usuário por ID |
-| GET | `/orders` | Lista todos os pedidos |
-| GET | `/orders/{id}` | Busca pedido por ID |
-| GET | `/products` | Lista todos os produtos |
-| GET | `/products/{id}` | Busca produto por ID |
-| GET | `/categories` | Lista todas as categorias |
-| GET | `/categories/{id}` | Busca categoria por ID |
+| `ResourceNotFoundException` | `RuntimeException` | Recurso não encontrado pelo ID informado |
+| `DatabaseException` | `RuntimeException` | Violação de integridade referencial ao deletar (ex.: usuário com pedidos) |
+
+### Handler global (`resources/exceptions/`)
+
+`ResourceExceptionHandler` — anotado com `@ControllerAdvice`, intercepta as exceções de domínio e retorna um corpo de erro padronizado.
+
+| Exceção capturada | Status HTTP retornado |
+|---|---|
+| `ResourceNotFoundException` | 404 Not Found |
+| `DatabaseException` | 400 Bad Request |
+
+### Corpo de erro — `StandardError`
+
+```json
+{
+  "timestamp": "2024-06-20T19:53:07Z",
+  "status": 404,
+  "error": "Resource not found",
+  "message": "Resource not found. Id 99",
+  "path": "/users/99"
+}
+```
 
 ---
 
@@ -225,6 +295,7 @@ O perfil ativo é `test` (definido em `application.properties`). Com ele ativo, 
 
 - **2 usuários:** Maria Brown, Alex Green
 - **3 pedidos** com status variados (PAID, WAITING_PAYMENT)
+- **1 pagamento** associado ao pedido PAID
 - **3 categorias:** Electronics, Books, Computers
 - **5 produtos** com associações a categorias
 - **4 itens de pedido** distribuídos entre os pedidos
@@ -237,19 +308,20 @@ O schema é gerenciado pelo Hibernate (`ddl-auto=update`) — não há scripts S
 
 ```
 src/main/java/com/educandoweb/course/
-├── CourseApplication.java          # Ponto de entrada Spring Boot
+├── CourseApplication.java                   # Ponto de entrada Spring Boot
 ├── config/
-│   └── TestConfig.java             # Seed de dados (perfil test)
+│   └── TestConfig.java                      # Seed de dados (perfil test)
 ├── entities/
 │   ├── User.java
 │   ├── Order.java
 │   ├── OrderItem.java
 │   ├── Product.java
 │   ├── Category.java
+│   ├── Payment.java
 │   ├── enums/
 │   │   └── OrderStatus.java
 │   └── pk/
-│       └── OrderItemPK.java        # Chave composta de OrderItem
+│       └── OrderItemPK.java                 # Chave composta de OrderItem
 ├── repositories/
 │   ├── UserRepository.java
 │   ├── OrderRepository.java
@@ -257,13 +329,19 @@ src/main/java/com/educandoweb/course/
 │   ├── ProductRepository.java
 │   └── CategoryRepository.java
 ├── services/
-│   ├── UserService.java
+│   ├── UserService.java                     # CRUD completo
 │   ├── OrderService.java
 │   ├── ProductService.java
-│   └── CategoryService.java
+│   ├── CategoryService.java
+│   └── exceptions/
+│       ├── ResourceNotFoundException.java   # 404
+│       └── DatabaseException.java           # 400
 └── resources/
-    ├── UserResource.java
+    ├── UserResource.java                    # CRUD completo
     ├── OrderResource.java
     ├── ProductResource.java
-    └── CategoryResource.java
+    ├── CategoryResource.java
+    └── exceptions/
+        ├── ResourceExceptionHandler.java    # @ControllerAdvice global
+        └── StandardError.java              # DTO de resposta de erro
 ```
