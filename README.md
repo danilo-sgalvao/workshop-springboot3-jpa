@@ -2,6 +2,8 @@
 
 Projeto de estudo desenvolvido no curso **Java COMPLETO** de Nelio Alves. Implementa um web service RESTful de e-commerce usando Spring Boot 3.5.10, JPA/Hibernate para ORM e H2 como banco de dados em memória.
 
+https://course-spring.up.railway.app/users/
+
 ---
 
 ## Tecnologias
